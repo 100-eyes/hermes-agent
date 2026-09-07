@@ -81,16 +81,18 @@ async def test_scheduler_receipt_route_is_dedicated_content_free_and_fail_closed
             {"Authorization": f"Bearer {API_KEY}"},
             {"Authorization": "Bearer wrong-observer-key"},
         ):
-            assert (await client.get(path, headers=headers)).status == 401
-        assert (
-            await client.get(
-                path,
-                headers=[
-                    ("Authorization", f"Bearer {OBSERVER_KEY}"),
-                    ("Authorization", "Bearer wrong-observer-key"),
-                ],
-            )
-        ).status == 401
+            response = await client.get(path, headers=headers)
+            assert response.status == 401
+            assert response.headers["Cache-Control"] == "no-store"
+        response = await client.get(
+            path,
+            headers=[
+                ("Authorization", f"Bearer {OBSERVER_KEY}"),
+                ("Authorization", "Bearer wrong-observer-key"),
+            ],
+        )
+        assert response.status == 401
+        assert response.headers["Cache-Control"] == "no-store"
         response = await client.get(
             path, headers={"Authorization": f"Bearer {OBSERVER_KEY}"}
         )
@@ -163,12 +165,12 @@ async def test_scheduler_receipt_route_is_dedicated_content_free_and_fail_closed
         in_progress = executions.create_execution(
             JOB_ID, source="builtin", scheduled_instant=SCHEDULED_AT
         )
-        assert (
-            await client.get(
-                f"/v1/cron/jobs/{JOB_ID}/executions/{in_progress['id']}/receipt",
-                headers={"Authorization": f"Bearer {OBSERVER_KEY}"},
-            )
-        ).status == 404
+        response = await client.get(
+            f"/v1/cron/jobs/{JOB_ID}/executions/{in_progress['id']}/receipt",
+            headers={"Authorization": f"Bearer {OBSERVER_KEY}"},
+        )
+        assert response.status == 404
+        assert response.headers["Cache-Control"] == "no-store"
         assert executions.mark_execution_running(in_progress["id"]) is not None
         assert (
             executions.finish_execution(
@@ -227,3 +229,22 @@ async def test_scheduler_receipt_route_is_dedicated_content_free_and_fail_closed
         assert (
             await client.get(path, headers={"Authorization": f"Bearer {OBSERVER_KEY}"})
         ).status == 404
+
+
+@pytest.mark.asyncio
+async def test_observer_receipt_missing_store_is_non_mutating(monkeypatch, tmp_path):
+    home = tmp_path / ".hermes"
+    ledger = tmp_path / "missing-profile" / "cron" / "executions.db"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("CRON_RECEIPT_OBSERVER_KEY", OBSERVER_KEY)
+    import cron.executions as executions
+
+    monkeypatch.setattr(executions, "EXECUTIONS_FILE", ledger)
+    adapter = APIServerAdapter(PlatformConfig(enabled=True, extra={"key": API_KEY}))
+    path = f"/v1/cron/jobs/{JOB_ID}/executions/{'0' * 32}/receipt"
+    async with TestClient(TestServer(_app(adapter))) as client:
+        response = await client.get(path, headers={"Authorization": f"Bearer {OBSERVER_KEY}"})
+
+    assert response.status == 404
+    assert response.headers["Cache-Control"] == "no-store"
+    assert not ledger.parent.exists()

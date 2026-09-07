@@ -155,6 +155,25 @@ def test_no_agent_receipt_is_strict_atomic_bounded_and_content_free(monkeypatch,
     assert executions.get_execution(first) is None
 
 
+def test_public_receipt_lookup_never_initializes_or_migrates_a_legacy_store(monkeypatch, tmp_path):
+    executions = _point_ledger(monkeypatch, tmp_path)
+    executions.EXECUTIONS_FILE.parent.mkdir(parents=True)
+    with sqlite3.connect(executions.EXECUTIONS_FILE) as conn:
+        conn.execute("CREATE TABLE legacy_marker (id INTEGER PRIMARY KEY)")
+
+    def unexpected_writer_transaction():
+        raise AssertionError("observer lookup entered the writer transaction")
+
+    monkeypatch.setattr(executions, "_transaction", unexpected_writer_transaction)
+
+    assert executions.get_public_execution_receipt("receipt-job", "0" * 32) is None
+    with sqlite3.connect(executions.EXECUTIONS_FILE) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert tables == {"legacy_marker"}
+    assert not executions.EXECUTIONS_FILE.with_name("executions.db-wal").exists()
+    assert not executions.EXECUTIONS_FILE.with_name("executions.db-shm").exists()
+
+
 def test_fresh_external_handoff_is_not_recovered_before_worker_adopts(
     monkeypatch, tmp_path
 ):

@@ -8,6 +8,7 @@ import re
 
 _JOB_ID = re.compile(r"[a-f0-9]{12,64}\Z")
 _EXECUTION_ID = re.compile(r"[a-f0-9]{32}\Z")
+_NO_STORE_HEADERS = {"Cache-Control": "no-store"}
 
 
 def _not_available(web):
@@ -15,6 +16,7 @@ def _not_available(web):
     return web.json_response(
         {"error": {"message": "Not found", "code": "cron_receipt_not_found"}},
         status=404,
+        headers=_NO_STORE_HEADERS,
     )
 
 
@@ -45,6 +47,7 @@ def _authorize(adapter, request, *, web):
                     }
                 },
                 status=401,
+                headers=_NO_STORE_HEADERS,
             )
         header = headers[0]
         supplied = header[7:].strip() if header.startswith("Bearer ") else ""
@@ -62,6 +65,7 @@ def _authorize(adapter, request, *, web):
             }
         },
         status=401,
+        headers=_NO_STORE_HEADERS,
     )
 
 
@@ -82,4 +86,4 @@ async def handle(adapter, request, *, web):
         return _not_available(web)
     if receipt is None:
         return _not_available(web)
-    return web.json_response(receipt, headers={"Cache-Control": "no-store"})
+    return web.json_response(receipt, headers=_NO_STORE_HEADERS)

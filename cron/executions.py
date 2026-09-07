@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from cron.ledger import ledger_transaction, open_ledger, prepare_ledger
+from cron.ledger import ledger_transaction, open_ledger, open_ledger_readonly, prepare_ledger
 from hermes_constants import get_hermes_home
 from hermes_time import now as _hermes_now
 
@@ -44,8 +44,12 @@ class _JSONObjectPairs(list):
 
 # --- executions ledger --------------------------------------------------------------------------
 
+def _ledger_path() -> Path:
+    return EXECUTIONS_FILE or (get_hermes_home().resolve() / "cron" / "executions.db")
+
+
 def _connect() -> sqlite3.Connection:
-    return open_ledger(EXECUTIONS_FILE or (get_hermes_home().resolve() / "cron" / "executions.db"))
+    return open_ledger(_ledger_path())
 
 
 def _initialize_schema(conn: sqlite3.Connection) -> None:
@@ -433,7 +437,13 @@ def _parse_receipt_envelope(output: Any) -> Optional[Dict[str, str]]:
 
 def get_public_execution_receipt(job_id: str, execution_id: str) -> Optional[Dict[str, str]]:
     """Project an immutable content-free receipt for the fixed exact job/execution join."""
-    with _transaction() as conn:
+    try:
+        conn = open_ledger_readonly(_ledger_path())
+    except sqlite3.Error:
+        # An absent ledger or a store predating receipt support is intentionally
+        # indistinguishable from a missing receipt to the observer capability.
+        return None
+    try:
         row = conn.execute(
             """SELECT e.id, e.job_id, e.source, e.process_id, e.scheduled_instant, e.started_at,
                       e.finished_at, r.receipt_version, r.receipt_id, r.result_sha256
@@ -442,6 +452,10 @@ def get_public_execution_receipt(job_id: str, execution_id: str) -> Optional[Dic
                WHERE e.id=? AND e.job_id=? AND e.status='completed'""",
             (str(execution_id), str(job_id)),
         ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
     if row is None or not all(row[field] for field in ("scheduled_instant", "started_at", "finished_at")):
         return None
     return {
